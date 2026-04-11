@@ -1,0 +1,62 @@
+name: Fetch TLE Data
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'   # Cada 2 horas en punto
+  workflow_dispatch:          # También permite lanzarlo a mano desde GitHub
+
+jobs:
+  fetch-tle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write         # Necesario para hacer commit al repo
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fetch TLE from CelesTrak
+        run: |
+          echo "Fetching TLE data from CelesTrak..."
+          HTTP_STATUS=$(curl -s -o data/tle.json -w "%{http_code}" \
+            --retry 3 \
+            --retry-delay 10 \
+            --max-time 30 \
+            -H "User-Agent: SatFleetLive-GitHubProxy/1.0 (https://satfleetlive.com)" \
+            "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json")
+
+          echo "HTTP Status: $HTTP_STATUS"
+
+          # Verificar que la respuesta es un JSON válido y no está vacía
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ CelesTrak returned HTTP $HTTP_STATUS. Keeping old data."
+            exit 0
+          fi
+
+          # Comprobar que es JSON real (no una página de error HTML)
+          if ! python3 -c "import json,sys; json.load(open('data/tle.json'))" 2>/dev/null; then
+            echo "❌ Response is not valid JSON. Keeping old data."
+            git checkout -- data/tle.json 2>/dev/null || true
+            exit 0
+          fi
+
+          LINES=$(wc -l < data/tle.json)
+          echo "✅ Fetched OK — $LINES lines"
+
+      - name: Write metadata
+        run: |
+          echo "{\"updated\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"source\": \"celestrak.org\"}" > data/meta.json
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/tle.json data/meta.json
+
+          # Solo commitear si hay cambios reales
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update TLE data [$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
+            git push
+          fi
