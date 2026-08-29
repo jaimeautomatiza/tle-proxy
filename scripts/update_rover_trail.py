@@ -4,8 +4,8 @@ import urllib.request
 from datetime import datetime, timezone
 
 ROVERS = {
-    "perseverance": "https://mars.nasa.gov/mmgis-maps/M20/Layers/json/M20_waypoints_current.json",
-    "curiosity":    "https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints_current.json",
+    "perseverance": "https://mars.nasa.gov/mmgis-maps/M20/Layers/json/M20_waypoints.json",
+    "curiosity":    "https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json",
 }
 
 DATA_DIR = "data"
@@ -15,61 +15,42 @@ def fetch_json(url):
         "Accept": "application/json",
         "User-Agent": "SatFleetLive-RoverProxy/1.0 (https://satfleetlive.com)"
     })
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:
         return json.load(resp)
-
-def load_trail(path):
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return json.load(f)
-    return {"points": []}
-
-def save_trail(path, trail):
-    with open(path, "w") as f:
-        json.dump(trail, f, indent=2)
 
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
 
     for rover_id, url in ROVERS.items():
         path = os.path.join(DATA_DIR, f"{rover_id}-trail.json")
-        trail = load_trail(path)
-
         try:
             data = fetch_json(url)
             features = data.get("features", [])
-            if not features:
-                print(f"⚠️  {rover_id}: sin features en la respuesta, se ignora esta vez.")
-                continue
-
-            props = features[0].get("properties", {})
-            lat = props.get("lat")
-            lng = props.get("lon")
-            sol = props.get("sol")
-
-            if lat is None or lng is None or sol is None:
-                print(f"⚠️  {rover_id}: faltan campos clave, se ignora esta vez.")
-                continue
-
-            last_point = trail["points"][-1] if trail["points"] else None
-            is_new = (last_point is None) or (last_point.get("sol") != sol)
-
-            if is_new:
+            points = []
+            for f in features:
+                props = f.get("properties", {})
+                lat = props.get("lat")
+                lon = props.get("lon")
+                if lat is None or lon is None:
+                    continue
                 dist_total_m = props.get("dist_total_m")
-                trail["points"].append({
+                points.append({
                     "lat": lat,
-                    "lng": lng,
-                    "sol": sol,
-                    "distTotalKm": round(dist_total_m / 1000, 2) if dist_total_m else None,
-                    "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    "lng": lon,
+                    "sol": props.get("sol"),
+                    "distTotalKm": round(dist_total_m / 1000, 2) if dist_total_m else None
                 })
-                save_trail(path, trail)
-                print(f"✅ {rover_id}: nuevo punto añadido (sol {sol}).")
-            else:
-                print(f"ℹ️  {rover_id}: sin cambios (sigue en sol {sol}).")
+
+            with open(path, "w") as out:
+                json.dump({
+                    "points": points,
+                    "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                }, out)
+
+            print(f"✅ {rover_id}: {len(points)} puntos guardados (histórico completo, directo de la NASA).")
 
         except Exception as e:
-            print(f"❌ {rover_id}: fallo al consultar la NASA — {e}. Se mantiene el archivo tal cual.")
+            print(f"❌ {rover_id}: fallo al consultar la NASA — {e}. Se mantiene el archivo anterior, sin tocar nada.")
 
 if __name__ == "__main__":
     main()
