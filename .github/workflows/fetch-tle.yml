@@ -25,7 +25,7 @@ jobs:
             --retry-delay 10 \
             --max-time 30 \
             -H "User-Agent: SatFleetLive-GitHubProxy/1.0 (https://satfleetlive.com)" \
-            "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json")
+            "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json" || echo "000")
 
           echo "HTTP Status: $HTTP_STATUS"
 
