@@ -1,0 +1,31 @@
+name: Fetch Mars Rover Trail
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # cada 6 horas — de sobra, los rovers no se mueven cada hora
+  workflow_dispatch:
+
+jobs:
+  fetch-rover-trail:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Update rover trails
+        run: python3 scripts/update_rover_trail.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/curiosity-trail.json data/perseverance-trail.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update rover trails [$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
+            git push
+          fi
