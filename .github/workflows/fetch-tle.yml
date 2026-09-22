@@ -60,5 +60,17 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "chore: update TLE data [$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
-            git push
+
+            # A veces GitHub tiene un fallo interno puntual en su propio
+            # servidor (documentado como "fatal error in commit_refs") —
+            # no es nada de nuestro lado, así que le damos un par de
+            # intentos más antes de rendirnos.
+            for i in 1 2 3; do
+              if git push; then
+                echo "✅ Push correcto (intento $i)"
+                break
+              fi
+              echo "⚠️ Push falló (intento $i), reintentando en 15s..."
+              sleep 15
+            done
           fi
