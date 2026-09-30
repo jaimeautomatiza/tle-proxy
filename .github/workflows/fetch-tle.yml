@@ -2,7 +2,7 @@ name: Fetch TLE Data
 
 on:
   schedule:
-    - cron: '0 */2 * * *'   # Cada 2 horas en punto
+    - cron: '7 */2 * * *'    # Cada 2 horas, en el minuto 7 (el minuto 0 es cuando GitHub más retrasa o descarta ejecuciones)
   workflow_dispatch:          # También permite lanzarlo a mano desde GitHub
 
 jobs:
@@ -18,9 +18,14 @@ jobs:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
       - name: Fetch TLE from CelesTrak
+        id: fetch
         run: |
           echo "Fetching TLE data from CelesTrak..."
-          HTTP_STATUS=$(curl -s -o data/tle.json -w "%{http_code}" \
+          # Se descarga a un archivo TEMPORAL y solo se copia a data/tle.json
+          # si pasa todas las comprobaciones. Antes se escribía directamente
+          # en data/tle.json: si CelesTrak respondía con un error, el error
+          # machacaba el archivo bueno antes de poder comprobarlo.
+          HTTP_STATUS=$(curl -s -o /tmp/tle-new.json -w "%{http_code}" \
             --retry 3 \
             --retry-delay 10 \
             --max-time 30 \
@@ -31,21 +36,27 @@ jobs:
 
           # Verificar que la respuesta es un JSON válido y no está vacía
           if [ "$HTTP_STATUS" != "200" ]; then
-            echo "❌ CelesTrak returned HTTP $HTTP_STATUS. Keeping old data."
+            echo "::warning::CelesTrak returned HTTP $HTTP_STATUS. Keeping old data."
             exit 0
           fi
 
-          # Comprobar que es JSON real (no una página de error HTML)
-          if ! python3 -c "import json,sys; json.load(open('data/tle.json'))" 2>/dev/null; then
-            echo "❌ Response is not valid JSON. Keeping old data."
-            git checkout -- data/tle.json 2>/dev/null || true
+          # Tiene que ser JSON, ser una LISTA y traer una cantidad razonable de
+          # satélites (hoy ~16.000). Un "[]" o un {"error": ...} también son
+          # JSON válido y antes se habrían publicado igualmente.
+          if ! python3 -c "import json,sys; d=json.load(open('/tmp/tle-new.json')); sys.exit(0 if isinstance(d, list) and len(d) >= 5000 else 1)" 2>/dev/null; then
+            echo "::warning::Response is not a valid satellite list. Keeping old data."
             exit 0
           fi
 
+          mv /tmp/tle-new.json data/tle.json
+          echo "ok=true" >> "$GITHUB_OUTPUT"
           LINES=$(wc -l < data/tle.json)
           echo "✅ Fetched OK — $LINES lines"
 
       - name: Write metadata
+        # Solo si de verdad hay datos nuevos: si no, meta.json diría que se
+        # actualizó cuando no es cierto.
+        if: steps.fetch.outputs.ok == 'true'
         run: |
           echo "{\"updated\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"source\": \"celestrak.org\"}" > data/meta.json
 
@@ -65,12 +76,18 @@ jobs:
             # servidor (documentado como "fatal error in commit_refs") —
             # no es nada de nuestro lado, así que le damos un par de
             # intentos más antes de rendirnos.
-            for i in 1 2 3; do
+            for i in 1 2 3 4 5; do
               if git push; then
                 echo "✅ Push correcto (intento $i)"
-                break
+                exit 0
               fi
               echo "⚠️ Push falló (intento $i), reintentando en 15s..."
               sleep 15
+              # Si otro workflow del repo (fetch-rover-trail) ha empujado
+              # mientras tanto, el push sigue rechazado por muchos intentos
+              # que hagamos: hay que traer sus cambios primero.
+              git pull --rebase --autostash || true
             done
+            echo "::error::No se pudo empujar tras 5 intentos."
+            exit 1
           fi

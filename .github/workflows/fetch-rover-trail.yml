@@ -2,7 +2,7 @@ name: Fetch Mars Rover Trail
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # cada 6 horas — de sobra, los rovers no se mueven cada hora
+    - cron: '23 */6 * * *'  # cada 6 horas, en el minuto 23 (así no coincide con fetch-tle ni con el minuto 0, el más saturado)
   workflow_dispatch:
 
 jobs:
@@ -27,5 +27,18 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "chore: update rover trails [$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
-            git push
+            # Este repositorio tiene otro workflow (fetch-tle) que también
+            # empuja datos. Si ha empujado mientras tanto, el push se rechaza:
+            # traemos sus cambios y repetimos, en vez de fallar.
+            for i in 1 2 3 4 5; do
+              if git push; then
+                echo "Push correcto (intento $i)."
+                exit 0
+              fi
+              echo "Push fallido (intento $i). Reintentando..."
+              sleep $((i * 5))
+              git pull --rebase --autostash || true
+            done
+            echo "::error::No se pudo empujar tras 5 intentos."
+            exit 1
           fi
